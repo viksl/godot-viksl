@@ -36,10 +36,13 @@
 #include "editor/editor_undo_redo_manager.h"
 #include "editor/gui/editor_spin_slider.h"
 #include "editor/themes/editor_scale.h"
+#include "modules/navigation/nav_utils.h"
 #include "scene/gui/view_panner.h"
 #include "scene/resources/text_line.h"
 
 #include <limits.h>
+
+#include <string>
 
 float AnimationBezierTrackEdit::_bezier_h_to_pixel(float p_h) {
 	float h = p_h;
@@ -888,6 +891,7 @@ void AnimationBezierTrackEdit::_select_at_anim(const Ref<Animation> &p_anim, int
 	selection.insert(IntPair(p_track, idx));
 	emit_signal(SNAME("select_key"), idx, true, p_track);
 	queue_redraw();
+
 }
 
 void AnimationBezierTrackEdit::gui_input(const Ref<InputEvent> &p_event) {
@@ -926,6 +930,29 @@ void AnimationBezierTrackEdit::gui_input(const Ref<InputEvent> &p_event) {
 		if (ED_IS_SHORTCUT("animation_editor/delete_selection", p_event)) {
 			if (!read_only) {
 				delete_selection();
+			}
+			accept_event();
+		}
+		if (ED_IS_SHORTCUT("animation_editor/scale_selected_keys", p_event)) {
+			if (!read_only && !is_keyframe_scaling_enabled && !selection.is_empty() && selection.size() > 1) {
+				is_keyframe_scaling_enabled = true;
+				Point2 initial_mouse_pos = timeline->get_local_mouse_position();
+				scaled_mouse_position = timeline->get_local_mouse_position();
+				playhead_position = get_playhead_position();
+				initial_distance_to_playhead = initial_mouse_pos.x - playhead_position;
+				for (const IntPair &E : selection) {
+					int track = E.first;
+					int key = E.second;
+					double initial_time = animation->track_get_key_time(track, key);
+					Vector2 in_handle = animation->bezier_track_get_key_in_handle(track, key);
+					Vector2 out_handle = animation->bezier_track_get_key_out_handle(track, key);
+					Animation::HandleMode handle_mode = animation->bezier_track_get_key_handle_mode(track, key);
+					KeyframeData keyframe_data = {E, initial_time, initial_time, in_handle, out_handle, handle_mode};
+					original_keyframe_data.push_back(keyframe_data);
+				}
+
+				set_process_input(true);
+				Input::get_singleton()->set_mouse_mode(Input::MOUSE_MODE_CONFINED);
 			}
 			accept_event();
 		}
@@ -1068,6 +1095,7 @@ void AnimationBezierTrackEdit::gui_input(const Ref<InputEvent> &p_event) {
 				if (!locked_tracks.has(E.key) && !hidden_tracks.has(E.key)) {
 					set_animation_and_track(animation, E.key, read_only);
 					_clear_selection();
+
 				}
 				return;
 			}
@@ -1929,6 +1957,72 @@ void AnimationBezierTrackEdit::_bind_methods() {
 
 	ADD_SIGNAL(MethodInfo("select_key", PropertyInfo(Variant::INT, "index"), PropertyInfo(Variant::BOOL, "single"), PropertyInfo(Variant::INT, "track")));
 	ADD_SIGNAL(MethodInfo("clear_selection"));
+}
+
+void AnimationBezierTrackEdit::input(const Ref<InputEvent> &p_event) {
+	// Stop keyframe scaling
+	if (Ref<InputEventMouseButton> mb = p_event; mb.is_valid() && mb->is_pressed() && mb->get_button_index() == MouseButton::LEFT && is_keyframe_scaling_enabled) {
+		is_keyframe_scaling_enabled = false;
+		original_keyframe_data.clear();
+		original_keyframe_data.shrink_to_fit();
+		accept_event();
+		set_process_input(false);
+		Input::get_singleton()->set_mouse_mode(Input::MOUSE_MODE_VISIBLE);
+		return;
+	}
+
+	// Scale keyframes
+	if (Ref<InputEventMouseMotion> mm = p_event; mm.is_valid() && is_keyframe_scaling_enabled) {
+		scaled_mouse_position += Input::get_singleton()->warp_mouse_motion(mm, get_global_rect());
+		double current_distance_to_playhead = scaled_mouse_position.x - playhead_position;
+		double scale_factor = current_distance_to_playhead / initial_distance_to_playhead;
+		int sign = scale_factor >= 0 ? 1 : -1;
+		scale_factor = scale_factor < 0.1f && scale_factor > -0.1f ? sign * 0.1f : scale_factor;
+		scale_selected_keyframes(scale_factor);
+		queue_redraw();
+		accept_event();
+		return;
+	}
+}
+
+void AnimationBezierTrackEdit::scale_selected_keyframes(double scale_factor) {
+	double playhead_time = timeline->get_play_position();
+	for (KeyframeData &keyframe_data : original_keyframe_data) {
+		const IntPair &E = keyframe_data.E;
+		int track = E.first;
+		int key = animation->track_find_key(track, keyframe_data.new_time, Animation::FIND_MODE_APPROX, false);
+
+		if (key < 0) {
+			continue;
+		}
+
+		keyframe_data.new_time = playhead_time + (keyframe_data.initial_time - playhead_time) * scale_factor;
+		real_t value = animation->bezier_track_get_key_value(track, key);
+		animation->track_remove_key(track, key);
+
+		auto in_handle = Vector2(
+				scale_factor >= 0 ? keyframe_data.in_handle.x : -keyframe_data.out_handle.x,
+				scale_factor >= 0 ? keyframe_data.in_handle.y : keyframe_data.out_handle.y
+			);
+		auto out_handle = Vector2(
+				scale_factor >= 0 ? keyframe_data.out_handle.x : -keyframe_data.in_handle.x,
+				scale_factor >= 0 ? keyframe_data.out_handle.y : keyframe_data.in_handle.y
+			);
+
+		int new_key = animation->bezier_track_insert_key(track, keyframe_data.new_time, value, in_handle, out_handle);
+		animation->bezier_track_set_key_handle_mode(track, new_key, keyframe_data.handle_mode);
+	}
+}
+
+int AnimationBezierTrackEdit::get_playhead_position() {
+	int limit = timeline->get_name_limit();
+	float scale = timeline->get_zoom_scale();
+	int px = (-timeline->get_value() + play_position_pos) * scale + limit;
+	if (px >= limit && px < get_size().width) {
+		return px;
+	}
+
+	return 0;
 }
 
 AnimationBezierTrackEdit::AnimationBezierTrackEdit() {

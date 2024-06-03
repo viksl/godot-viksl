@@ -31,6 +31,7 @@
 #ifndef ANIMATION_BEZIER_EDITOR_H
 #define ANIMATION_BEZIER_EDITOR_H
 
+#include <vector>
 #include "animation_track_editor.h"
 #include "core/templates/hashfuncs.h"
 
@@ -98,6 +99,8 @@ class AnimationBezierTrackEdit : public Control {
 	void _update_hidden_tracks_after(int p_track);
 
 	virtual void gui_input(const Ref<InputEvent> &p_event) override;
+	virtual void input(const Ref<InputEvent> &p_event) override;
+
 	void _menu_selected(int p_index);
 
 	void _play_position_draw();
@@ -223,6 +226,23 @@ public:
 	void delete_selection();
 
 	void _bezier_track_insert_key(int p_track, double p_time, real_t p_value, const Vector2 &p_in_handle, const Vector2 &p_out_handle, const Animation::HandleMode p_handle_mode);
+
+	struct KeyframeData {
+		IntPair E;
+		double initial_time;
+		double new_time;
+		Vector2 in_handle;
+		Vector2 out_handle;
+		Animation::HandleMode handle_mode;
+	};
+
+	bool is_keyframe_scaling_enabled = false;
+	int playhead_position = 0;
+	double initial_distance_to_playhead = 0.0f;
+	int get_playhead_position();
+	void scale_selected_keyframes(double scale_factor);
+	Vector2 scaled_mouse_position = Vector2(0, 0);
+	std::vector<KeyframeData> original_keyframe_data;
 
 	AnimationBezierTrackEdit();
 };
