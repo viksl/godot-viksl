@@ -681,13 +681,7 @@ void main() {
 	vec4 final_density = vec4(total_light * scattering + emission, total_density);
 
 	final_density = mix(final_density, reprojected_density, reproject_amount);
-	// This does not resolve the NaN issues mathematically - it just filters them out so they don't flood the
-	// screen through reprojection.
-	if (any(isnan(final_density)) || any(isinf(final_density)))
-	{
-		final_density = vec4(0.0);
-	}
-	
+
 	imageStore(density_map, pos, final_density);
 #ifdef NO_IMAGE_ATOMICS
 	density_only_map[lpos] = 0;
