@@ -681,6 +681,9 @@ void main() {
 	vec4 final_density = vec4(total_light * scattering + emission, total_density);
 
 	final_density = mix(final_density, reprojected_density, reproject_amount);
+	
+	bool is_density_invalid = any(isnan(final_density)) || any(isinf(final_density));
+	final_density = is_density_invalid ? vec4(0.0) : final_density;
 
 	imageStore(density_map, pos, final_density);
 #ifdef NO_IMAGE_ATOMICS
